@@ -25,10 +25,10 @@ import unittest
 
 from climada.entity import ImpactFunc, ImpactFuncSet
 import numpy as np
-from climada.entity import BlackMarble
+from climada.entity import BlackMarble, Entity
 from climada.hazard import TropCyclone
 import os
-from climada.engine.uncertainty import UncVar, UncSensitivity
+from climada.engine.uncertainty import UncVar, UncImpact, UncCostBenefit
 import scipy as sp
 
 
@@ -57,7 +57,7 @@ def imp_fun_tc(G=1, v_half=84.7, vmin=25.7, k=3, _id=1):
         Impact function with given parameters
 
     """
-    
+
     imp_fun = ImpactFunc()
     imp_fun.haz_type = 'TC'
     imp_fun.id = _id
@@ -68,7 +68,7 @@ def imp_fun_tc(G=1, v_half=84.7, vmin=25.7, k=3, _id=1):
     imp_fun.check()
     impf_set = ImpactFuncSet()
     impf_set.append(imp_fun)
-    
+
     return impf_set
 
 def xhi(v, v_half, vmin):
@@ -87,12 +87,12 @@ def xhi(v, v_half, vmin):
     Returns
     -------
     float
-        impact function xhi parameter 
+        impact function xhi parameter
 
     """
-    
+
     return max([(v - vmin), 0]) / (v_half - vmin)
-  
+
 def imp_fun_param(v, G, v_half, vmin, k):
     """
     impact function formula from (Knutson 2011)
@@ -102,7 +102,7 @@ def imp_fun_param(v, G, v_half, vmin, k):
     v : float
         intensity (wind speed)
     G : float
-        Max impact. 
+        Max impact.
     v_half : float
         intensity at half curve.
     vmin : float
@@ -116,7 +116,7 @@ def imp_fun_param(v, G, v_half, vmin, k):
         impact value at given intensity v
 
     """
-    
+
     return G * xhi(v, v_half, vmin)**k / (1 + xhi(v, v_half, vmin)**k)
 
 
@@ -125,35 +125,59 @@ def dummy_exp():
     exp = BlackMarble()
     exp.read_hdf5(file_name)
     return exp
-    
-def dummy_haz():
+
+def dummy_haz(x=1):
     file_name = os.path.join(CURR_DIR, "tc_AIA.h5")
     haz= TropCyclone()
     haz.read_hdf5(file_name)
+    haz.intensity = haz.intensity.multiply(x)
     return haz
-    
+
+HAZ_TEST_MAT = '/Users/ckropf/Documents/Climada/climada_python/climada/hazard/test/data/atl_prob_no_name.mat'
+ENT_TEST_MAT = '/Users/ckropf/Documents/Climada/climada_python/climada/entity/exposures/test/data/demo_today.mat'
+def dummy_ent():
+    entity = Entity()
+    entity.read_mat(ENT_TEST_MAT)
+    entity.check()
+    entity.measures._data['TC'] = entity.measures._data.pop('XX')
+    for meas in entity.measures.get_measure('TC'):
+        meas.haz_type = 'TC'
+    entity.check()
+    return entity
+
+
 class TestUncVar(unittest.TestCase):
-    
+
     exp = dummy_exp()
     haz = dummy_haz()
     impf = imp_fun_tc
-    
+
     distr_dict = {"G": sp.stats.uniform(0.8,1),
                   "v_half": sp.stats.uniform(50, 100),
                   "vmin": sp.stats.norm(15,30),
                   "k": sp.stats.uniform(1, 5)
                   }
     impf_unc = UncVar(impf, distr_dict)
-    
-    impf_unc.plot_distr()
-    
-    unc = UncSensitivity(exp, impf_unc, haz)
-    unc.calc_impact_sobol_sensitivity(N=1, calc_eai_exp=False, calc_at_event=False)
-    
-    
 
-    
+    impf_unc.plot_distr()
+
+    unc = UncImpact(exp, impf_unc, haz)
+    unc.make_sample(N=1)
+    unc.calc_impact_distribution(calc_eai_exp=True)
+    unc.calc_impact_sensitivity()
+
+    unc.plot_metric_distribution(['aai_agg', 'freq_curve'])
+    unc.plot_rp_distribution()
+
+    haz_unc = UncVar(dummy_haz, {'x': sp.stats.norm(1, 1)})
+    ent = dummy_ent()
+    unc = UncCostBenefit(haz_unc, ent)
+    unc.make_sample(N=1)
+    unc.calc_cost_benefit_distribution()
+    unc.calc_cost_benefit_sensitivity()
+
+    unc.plot_metric_distribution(list(unc.metrics.keys())[0:6])
+
 if __name__ == "__main__":
     TESTS = unittest.TestLoader().loadTestsFromTestCase(TestUncVar)
     unittest.TextTestRunner(verbosity=2).run(TESTS)
-    
